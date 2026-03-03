@@ -6,9 +6,7 @@ use ratatui::{
     style::{palette::tailwind::SLATE, Color, Modifier, Style, Stylize},
     symbols::border,
     text::{Line, Span, Text},
-    widgets::{
-        Block, Borders, HighlightSpacing, List, ListItem, ListState, Padding, Paragraph, Widget,
-    },
+    widgets::{Block, HighlightSpacing, List, ListItem, ListState, Paragraph},
     DefaultTerminal, Frame,
 };
 use std::{fs, str::FromStr};
@@ -27,48 +25,14 @@ const SELECTED_STYLE: Style = Style::new().bg(SLATE.c800).add_modifier(Modifier:
 const NESTED_SPACER: &str = "|_";
 
 pub fn init() -> Result<()> {
-    let paths = retreive_paths(String::from("./"));
-    let mut fd = Fd::new(paths);
+    let mut fd = Fd::new(String::from("./"));
 
     ratatui::run(|terminal| fd.run(terminal))
 }
 
-fn retreive_paths(path: String) -> Vec<FdPath> {
-    let mut paths: Vec<FdPath> = Vec::new();
-
-    for entry in fs::read_dir(path).expect("unable to read path") {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        let metadata = entry.metadata().unwrap();
-        let p = format!("{}", path.display());
-        let spacer = String::from("");
-
-        if metadata.is_dir() {
-            paths.push(FdPath {
-                path: p,
-                name: entry.file_name().into_string().unwrap(),
-                spacer,
-                is_expended: false,
-                is_dir: true,
-                total_paths: 0,
-            });
-        } else if metadata.is_file() {
-            paths.push(FdPath {
-                path: p,
-                name: entry.file_name().into_string().unwrap(),
-                spacer,
-                is_expended: false,
-                is_dir: false,
-                total_paths: 0,
-            });
-        }
-    }
-
-    paths
-}
-
 #[derive(Debug)]
 pub struct Fd {
+    base_path: String,
     exit: bool,
     list_state: ListState,
     list: Vec<FdPath>,
@@ -86,8 +50,11 @@ enum FdAction {
 }
 
 impl Fd {
-    pub fn new(paths: Vec<FdPath>) -> Fd {
+    pub fn new(path: String) -> Fd {
+        let paths = Fd::retreive_paths(path.to_owned());
+
         Fd {
+            base_path: path.to_owned(),
             exit: false,
             list_state: ListState::default(),
             list: paths,
@@ -110,10 +77,10 @@ impl Fd {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let bottom_height = if let FdAction::Rename = self.action {
-            3
-        } else {
+        let bottom_height = if let FdAction::Traverse = self.action {
             1
+        } else {
+            3
         };
 
         // setup layouts for app
@@ -154,6 +121,40 @@ impl Fd {
         Ok(())
     }
 
+    fn retreive_paths(path: String) -> Vec<FdPath> {
+        let mut paths: Vec<FdPath> = Vec::new();
+
+        for entry in fs::read_dir(path).expect("unable to read path") {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            let metadata = entry.metadata().unwrap();
+            let p = format!("{}", path.display());
+            let spacer = String::from("");
+
+            if metadata.is_dir() {
+                paths.push(FdPath {
+                    path: p,
+                    name: entry.file_name().into_string().unwrap(),
+                    spacer,
+                    is_expended: false,
+                    is_dir: true,
+                    total_paths: 0,
+                });
+            } else if metadata.is_file() {
+                paths.push(FdPath {
+                    path: p,
+                    name: entry.file_name().into_string().unwrap(),
+                    spacer,
+                    is_expended: false,
+                    is_dir: false,
+                    total_paths: 0,
+                });
+            }
+        }
+
+        paths
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self.action {
             FdAction::Traverse => match key_event.code {
@@ -162,6 +163,14 @@ impl Fd {
                 KeyCode::Char('j') => self.list_state.select_next(),
 
                 KeyCode::Char('k') => self.list_state.select_previous(),
+
+                KeyCode::Char('d') => {
+                    self.action = FdAction::Delete;
+
+                    if let Some(selected) = self.get_selected() {
+                        self.input = selected.path.to_owned();
+                    }
+                }
 
                 KeyCode::Enter => self.toggle_expend(),
 
@@ -189,10 +198,11 @@ impl Fd {
 
                     // rename file
                     if let Some(selected) = self.get_selected() {
-                        let _ = fs::rename(&selected.path, input_value);
+                        fs::rename(&selected.path, input_value)
+                            .expect("unable to rename something went wrong");
                     }
 
-                    self.list = retreive_paths("./".to_string());
+                    self.list = Fd::retreive_paths(self.base_path.to_owned());
                     self.reset_cursor();
                     self.action = FdAction::Traverse;
                 }
@@ -233,7 +243,30 @@ impl Fd {
                 _ => {}
             },
 
-            FdAction::Delete => {}
+            FdAction::Delete => match key_event.code {
+                KeyCode::Esc => {
+                    self.action = FdAction::Traverse;
+                    self.reset_cursor();
+                }
+
+                KeyCode::Enter => {
+                    if let Some(selected) = self.get_selected() {
+                        if selected.is_dir {
+                            fs::remove_dir_all(&selected.path)
+                                .expect("unable to delete dir something went wrong");
+                        } else {
+                            fs::remove_file(&selected.path)
+                                .expect("unable to delete something went wrong");
+                        }
+                    }
+
+                    self.list = Fd::retreive_paths(self.base_path.to_owned());
+                    self.reset_cursor();
+                    self.action = FdAction::Traverse;
+                }
+
+                _ => {}
+            },
         }
     }
 
@@ -296,7 +329,7 @@ impl Fd {
                         item.is_expended = true;
 
                         let insert_idx = idx + 1;
-                        let mut paths = retreive_paths(item.path.to_owned());
+                        let mut paths = Fd::retreive_paths(item.path.to_owned());
 
                         item.total_paths += paths.len();
 
@@ -358,36 +391,73 @@ impl Fd {
     }
 
     fn render_bottom(&mut self, frame: &mut Frame, area: Rect) {
-        // render input if in Rename Action
-        if let FdAction::Rename = self.action {
-            // set cursor position inside box
-            frame.set_cursor_position(Position::new(
-                area.x + 1 + self.input_index as u16,
-                area.y + 1,
-            ));
+        match self.action {
+            FdAction::Delete => {
+                let delete_block = Block::bordered()
+                    .title(Line::from(" Delete ".bold()).centered())
+                    .title_bottom(
+                        Line::from(vec![
+                            " submit ".into(),
+                            "<enter>".blue().bold(),
+                            " exit ".into(),
+                            "<esc>".blue().bold(),
+                        ])
+                        .centered(),
+                    )
+                    .border_set(border::THICK);
 
-            // render input
-            frame.render_widget(
-                Paragraph::new(self.input.to_owned()).block(
-                    Block::bordered()
-                        .title(Line::from(" Rename ".bold()).centered())
-                        .title_bottom(Line::from(" submit <enter> "))
-                        .border_set(border::THICK),
-                ),
-                area,
-            );
-        } else {
-            frame.render_widget(
-                Line::from(vec![
+                // render input
+                let delete = Paragraph::new(self.input.to_owned()).block(delete_block);
+
+                frame.render_widget(delete, area);
+            }
+
+            FdAction::Rename => {
+                // set cursor position inside box
+                frame.set_cursor_position(Position::new(
+                    area.x + 1 + self.input_index as u16,
+                    area.y + 1,
+                ));
+
+                // input box
+                let input_block = Block::bordered()
+                    .title(Line::from(" Rename ".bold()).centered())
+                    .title_bottom(
+                        Line::from(vec![
+                            " submit ".into(),
+                            "<enter>".blue().bold(),
+                            " move left ".into(),
+                            "<left>".blue().bold(),
+                            " move right ".into(),
+                            "<right>".blue().bold(),
+                            " exit ".into(),
+                            "<esc>".blue().bold(),
+                        ])
+                        .centered(),
+                    )
+                    .border_set(border::THICK);
+
+                // render input
+                let input = Paragraph::new(self.input.to_owned()).block(input_block);
+
+                frame.render_widget(input, area);
+            }
+
+            _ => {
+                let instructions = Line::from(vec![
+                    " delete ".into(),
+                    "<d>".blue().bold(),
+                    " rename ".into(),
+                    "<r>".blue().bold(),
                     " Down ".into(),
                     "<j>".blue().bold(),
                     " Up ".into(),
                     "<k>".blue().bold(),
                     " Quit ".into(),
                     "<q> ".blue().bold(),
-                ]),
-                area,
-            );
+                ]);
+                frame.render_widget(instructions, area);
+            }
         }
     }
 }
