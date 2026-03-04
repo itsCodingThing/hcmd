@@ -9,25 +9,43 @@ use ratatui::{
     widgets::{Block, HighlightSpacing, List, ListItem, ListState, Paragraph},
     DefaultTerminal, Frame,
 };
-use std::{fs, str::FromStr};
-
-#[derive(Debug)]
-pub struct FdPath {
-    path: String,
-    name: String,
-    spacer: String,
-    is_dir: bool,
-    is_expended: bool,
-    total_paths: usize,
-}
+use std::{fs, iter, str::FromStr};
 
 const SELECTED_STYLE: Style = Style::new().bg(SLATE.c800).add_modifier(Modifier::BOLD);
-const NESTED_SPACER: &str = "|_";
+const NESTED_SPACER: &str = "|-";
 
 pub fn init() -> Result<()> {
     let mut fd = Fd::new(String::from("./"));
 
     ratatui::run(|terminal| fd.run(terminal))
+}
+
+#[derive(Debug)]
+pub struct FdPath {
+    /// full path of the file or dir
+    path: String,
+
+    /// name of the file or dir
+    name: String,
+
+    /// if path is dir or not
+    is_dir: bool,
+
+    /// for dir type if dir is expended
+    is_expended: bool,
+
+    /// string to render front of the name and
+    /// used to create a seperation
+    spacer: String,
+
+    /// path of direct parent dir
+    direct_parent: String,
+
+    /// paths of all parent dir
+    parents: Vec<String>,
+
+    /// total number of children path
+    total_paths: usize,
 }
 
 #[derive(Debug)]
@@ -43,22 +61,22 @@ pub struct Fd {
 
 #[derive(Debug)]
 enum FdAction {
-    Traverse,
-    Select,
+    Normal,
+    Create,
     Rename,
     Delete,
 }
 
 impl Fd {
     pub fn new(path: String) -> Fd {
-        let paths = Fd::retreive_paths(path.to_owned());
+        let paths = Fd::retreive_paths(path.to_owned(), String::from(""), Vec::new());
 
         Fd {
             base_path: path.to_owned(),
             exit: false,
             list_state: ListState::default(),
             list: paths,
-            action: FdAction::Traverse,
+            action: FdAction::Normal,
             input: String::new(),
             input_index: 0,
         }
@@ -77,7 +95,7 @@ impl Fd {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let bottom_height = if let FdAction::Traverse = self.action {
+        let bottom_height = if let FdAction::Normal = self.action {
             1
         } else {
             3
@@ -121,34 +139,32 @@ impl Fd {
         Ok(())
     }
 
-    fn retreive_paths(path: String) -> Vec<FdPath> {
+    fn retreive_paths(path: String, spacer: String, parents: Vec<String>) -> Vec<FdPath> {
         let mut paths: Vec<FdPath> = Vec::new();
+        let dir = fs::read_dir(&path).expect("unable to read dir");
 
-        for entry in fs::read_dir(path).expect("unable to read path") {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            let metadata = entry.metadata().unwrap();
-            let p = format!("{}", path.display());
-            let spacer = String::from("");
+        for item in dir.into_iter().flatten() {
+            if let Ok(metadata) = item.metadata() {
+                let mut fd_path = FdPath {
+                    path: item.path().to_string_lossy().to_string(),
+                    name: item
+                        .file_name()
+                        .into_string()
+                        .unwrap_or("unknown".to_string()),
+                    spacer: spacer.to_owned(),
+                    is_expended: false,
+                    is_dir: metadata.is_dir(),
+                    total_paths: 0,
+                    direct_parent: path.to_owned(),
+                    parents: Vec::new(),
+                };
 
-            if metadata.is_dir() {
-                paths.push(FdPath {
-                    path: p,
-                    name: entry.file_name().into_string().unwrap(),
-                    spacer,
-                    is_expended: false,
-                    is_dir: true,
-                    total_paths: 0,
-                });
-            } else if metadata.is_file() {
-                paths.push(FdPath {
-                    path: p,
-                    name: entry.file_name().into_string().unwrap(),
-                    spacer,
-                    is_expended: false,
-                    is_dir: false,
-                    total_paths: 0,
-                });
+                if !parents.is_empty() {
+                    fd_path.parents.append(&mut parents.to_vec());
+                }
+
+                fd_path.parents.push(path.to_owned());
+                paths.push(fd_path);
             }
         }
 
@@ -157,7 +173,7 @@ impl Fd {
 
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self.action {
-            FdAction::Traverse => match key_event.code {
+            FdAction::Normal => match key_event.code {
                 KeyCode::Char('q') => self.exit(),
 
                 KeyCode::Char('j') => self.list_state.select_next(),
@@ -172,7 +188,9 @@ impl Fd {
                     }
                 }
 
-                KeyCode::Enter => self.toggle_expend(),
+                KeyCode::Char('a') => {
+                    self.action = FdAction::Create;
+                }
 
                 KeyCode::Char('r') => {
                     self.action = FdAction::Rename;
@@ -182,14 +200,25 @@ impl Fd {
                     }
                 }
 
+                KeyCode::Enter => self.toggle_expend(),
+
                 _ => {}
             },
 
-            FdAction::Select => {}
+            FdAction::Create => match key_event.code {
+                KeyCode::Esc => {
+                    self.action = FdAction::Normal;
+                    self.reset_cursor();
+                }
+
+                KeyCode::Enter => {}
+
+                _ => {}
+            },
 
             FdAction::Rename => match key_event.code {
                 KeyCode::Esc => {
-                    self.action = FdAction::Traverse;
+                    self.action = FdAction::Normal;
                     self.reset_cursor();
                 }
 
@@ -202,9 +231,10 @@ impl Fd {
                             .expect("unable to rename something went wrong");
                     }
 
-                    self.list = Fd::retreive_paths(self.base_path.to_owned());
+                    self.list =
+                        Fd::retreive_paths(self.base_path.to_owned(), String::from(""), Vec::new());
                     self.reset_cursor();
-                    self.action = FdAction::Traverse;
+                    self.action = FdAction::Normal;
                 }
 
                 KeyCode::Right => self.move_cursor_right(),
@@ -245,7 +275,7 @@ impl Fd {
 
             FdAction::Delete => match key_event.code {
                 KeyCode::Esc => {
-                    self.action = FdAction::Traverse;
+                    self.action = FdAction::Normal;
                     self.reset_cursor();
                 }
 
@@ -260,9 +290,10 @@ impl Fd {
                         }
                     }
 
-                    self.list = Fd::retreive_paths(self.base_path.to_owned());
+                    self.list =
+                        Fd::retreive_paths(self.base_path.to_owned(), String::from(""), Vec::new());
                     self.reset_cursor();
-                    self.action = FdAction::Traverse;
+                    self.action = FdAction::Normal;
                 }
 
                 _ => {}
@@ -314,43 +345,92 @@ impl Fd {
     }
 
     fn toggle_expend(&mut self) {
-        if let Some(idx) = self.list_state.selected() {
-            if let Some(item) = self.list.get_mut(idx) {
+        if let Some(selected_idx) = self.list_state.selected() {
+            if let Some(item) = self.list.get(selected_idx) {
                 if item.is_dir {
                     if item.is_expended {
-                        item.is_expended = false;
-
-                        let remove_idx_from = idx + 1;
-                        let remove_idx_to = item.total_paths + remove_idx_from;
-
-                        item.total_paths = 0;
-                        self.list.drain(remove_idx_from..remove_idx_to);
+                        self.collaspe(selected_idx);
                     } else {
-                        item.is_expended = true;
-
-                        let insert_idx = idx + 1;
-                        let mut paths = Fd::retreive_paths(item.path.to_owned());
-
-                        item.total_paths += paths.len();
-
-                        paths.iter_mut().for_each(|p| {
-                            p.spacer = item.spacer.to_owned() + NESTED_SPACER;
-                        });
-
-                        self.list.splice(insert_idx..insert_idx, paths);
+                        self.expand(selected_idx);
                     }
                 }
             }
         }
     }
 
+    fn collaspe(&mut self, selected_idx: usize) {
+        if let Some(item) = self.list.get_mut(selected_idx) {
+            item.total_paths = 0;
+            item.is_expended = false;
+
+            let path = item.path.to_owned();
+
+            let mut remove_idxs: Vec<usize> = Vec::new();
+            for (i, list_item) in self.list.iter().enumerate() {
+                for p in list_item.parents.iter() {
+                    if *p == path {
+                        remove_idxs.push(i);
+                    }
+                }
+            }
+
+            if !remove_idxs.is_empty() {
+                let remove_idx_from = remove_idxs[0];
+                let remove_idx_to = remove_idxs[remove_idxs.len() - 1] + 1;
+
+                self.list.drain(remove_idx_from..remove_idx_to);
+            }
+        }
+    }
+
+    fn expand(&mut self, selected_idx: usize) {
+        if let Some(item) = self.list.get_mut(selected_idx) {
+            let insert_idx = selected_idx + 1;
+            let spacer = item.spacer.to_owned() + NESTED_SPACER;
+            let paths = Fd::retreive_paths(item.path.to_owned(), spacer, item.parents.to_vec());
+
+            item.total_paths += paths.len();
+            item.is_expended = true;
+
+            self.list.splice(insert_idx..insert_idx, paths);
+        }
+    }
+
     fn render_preview(&self, frame: &mut Frame, area: Rect) {
-        frame.render_widget(
-            Block::bordered()
-                .title(Line::from(" Preview ".bold()).centered())
-                .border_set(border::THICK),
-            area,
-        );
+        let selected_idx = self.list_state.selected();
+        let item = self.list.get(selected_idx.unwrap()).unwrap();
+
+        let block = Block::bordered()
+            .title(Line::from(" Preview ".bold()).centered())
+            .border_set(border::THICK);
+
+        let text = vec![
+            Line::from(vec![
+                Span::raw("name: "),
+                Span::styled(item.name.to_owned(), Style::new().green().italic()),
+            ]),
+            Line::from(vec![
+                Span::raw("path: "),
+                Span::styled(item.path.to_owned(), Style::new().green().italic()),
+            ]),
+            Line::from(vec![
+                Span::raw("parents: "),
+                Span::styled(
+                    format!("{:?}", item.parents.to_owned()),
+                    Style::new().green().italic(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("total_paths: "),
+                Span::styled(
+                    format!("{:?}", item.total_paths),
+                    Style::new().green().italic(),
+                ),
+            ]),
+        ];
+        let preview = Paragraph::new(text).block(block);
+
+        frame.render_widget(preview, area);
     }
 
     fn render_list(&mut self, frame: &mut Frame, area: Rect) {
