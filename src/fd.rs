@@ -113,7 +113,7 @@ impl Fd {
         let [list_area, preview_area] = horizontal.areas(main_area);
 
         // title area
-        frame.render_widget(Line::from(" File Explorer ".bold()).centered(), title_area);
+        frame.render_widget(Line::from(" Enhanced <fd> ".bold()).centered(), title_area);
 
         // list area
         self.render_list(frame, list_area);
