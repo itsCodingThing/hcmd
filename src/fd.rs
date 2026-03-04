@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, HighlightSpacing, List, ListItem, ListState, Paragraph},
     DefaultTerminal, Frame,
 };
-use std::{fs, iter, str::FromStr};
+use std::{fs, str::FromStr};
 
 const SELECTED_STYLE: Style = Style::new().bg(SLATE.c800).add_modifier(Modifier::BOLD);
 const NESTED_SPACER: &str = "|-";
@@ -155,7 +155,7 @@ impl Fd {
                     is_expended: false,
                     is_dir: metadata.is_dir(),
                     total_paths: 0,
-                    direct_parent: path.to_owned(),
+                    direct_parent: item.path().parent().unwrap().to_string_lossy().to_string(),
                     parents: Vec::new(),
                 };
 
@@ -190,6 +190,10 @@ impl Fd {
 
                 KeyCode::Char('a') => {
                     self.action = FdAction::Create;
+
+                    if let Some(selected) = self.get_selected() {
+                        self.input = selected.path.to_owned();
+                    }
                 }
 
                 KeyCode::Char('r') => {
@@ -211,7 +215,30 @@ impl Fd {
                     self.reset_cursor();
                 }
 
-                KeyCode::Enter => {}
+                KeyCode::Enter => {
+                    let input_value = self.input.to_owned();
+
+                    // if ends with "/" create dir else file
+                    if input_value.ends_with("/") {
+                        fs::create_dir_all(input_value).expect("unable to create dirs");
+                    } else {
+                        fs::File::create_new(input_value)
+                            .expect("unable to create file or intermidiate dir does not exits");
+                    }
+
+                    self.list =
+                        Fd::retreive_paths(self.base_path.to_owned(), String::from(""), Vec::new());
+                    self.reset_cursor();
+                    self.action = FdAction::Normal;
+                }
+
+                KeyCode::Right => self.move_cursor_right(),
+
+                KeyCode::Left => self.move_cursor_left(),
+
+                KeyCode::Char(to_insert) => self.insert_char(to_insert),
+
+                KeyCode::Backspace => self.delete_char(),
 
                 _ => {}
             },
@@ -241,34 +268,9 @@ impl Fd {
 
                 KeyCode::Left => self.move_cursor_left(),
 
-                KeyCode::Char(to_insert) => {
-                    let index = self.byte_index();
-                    self.input.insert(index, to_insert);
-                    self.move_cursor_right();
-                }
+                KeyCode::Char(to_insert) => self.insert_char(to_insert),
 
-                KeyCode::Backspace => {
-                    let is_not_cursor_leftmost = self.input_index != 0;
-                    if is_not_cursor_leftmost {
-                        // Method "remove" is not used on the saved text for deleting the selected char.
-                        // Reason: Using remove on String works on bytes instead of the chars.
-                        // Using remove would require special care because of char boundaries.
-
-                        let current_index = self.input_index;
-                        let from_left_to_current_index = current_index - 1;
-
-                        // Getting all characters before the selected character.
-                        let before_char_to_delete =
-                            self.input.chars().take(from_left_to_current_index);
-                        // Getting all characters after selected character.
-                        let after_char_to_delete = self.input.chars().skip(current_index);
-
-                        // Put all characters together except the selected one.
-                        // By leaving the selected one out, it is forgotten and therefore deleted.
-                        self.input = before_char_to_delete.chain(after_char_to_delete).collect();
-                        self.move_cursor_left();
-                    }
-                }
+                KeyCode::Backspace => self.delete_char(),
 
                 _ => {}
             },
@@ -298,6 +300,34 @@ impl Fd {
 
                 _ => {}
             },
+        }
+    }
+
+    fn insert_char(&mut self, to_insert: char) {
+        let index = self.byte_index();
+        self.input.insert(index, to_insert);
+        self.move_cursor_right();
+    }
+
+    fn delete_char(&mut self) {
+        let is_not_cursor_leftmost = self.input_index != 0;
+        if is_not_cursor_leftmost {
+            // Method "remove" is not used on the saved text for deleting the selected char.
+            // Reason: Using remove on String works on bytes instead of the chars.
+            // Using remove would require special care because of char boundaries.
+
+            let current_index = self.input_index;
+            let from_left_to_current_index = current_index - 1;
+
+            // Getting all characters before the selected character.
+            let before_char_to_delete = self.input.chars().take(from_left_to_current_index);
+            // Getting all characters after selected character.
+            let after_char_to_delete = self.input.chars().skip(current_index);
+
+            // Put all characters together except the selected one.
+            // By leaving the selected one out, it is forgotten and therefore deleted.
+            self.input = before_char_to_delete.chain(after_char_to_delete).collect();
+            self.move_cursor_left();
         }
     }
 
@@ -421,6 +451,13 @@ impl Fd {
                 ),
             ]),
             Line::from(vec![
+                Span::raw("direct parent: "),
+                Span::styled(
+                    format!("{:?}", item.direct_parent.to_owned()),
+                    Style::new().green().italic(),
+                ),
+            ]),
+            Line::from(vec![
                 Span::raw("total_paths: "),
                 Span::styled(
                     format!("{:?}", item.total_paths),
@@ -502,6 +539,37 @@ impl Fd {
                 // input box
                 let input_block = Block::bordered()
                     .title(Line::from(" Rename ".bold()).centered())
+                    .title_bottom(
+                        Line::from(vec![
+                            " submit ".into(),
+                            "<enter>".blue().bold(),
+                            " move left ".into(),
+                            "<left>".blue().bold(),
+                            " move right ".into(),
+                            "<right>".blue().bold(),
+                            " exit ".into(),
+                            "<esc>".blue().bold(),
+                        ])
+                        .centered(),
+                    )
+                    .border_set(border::THICK);
+
+                // render input
+                let input = Paragraph::new(self.input.to_owned()).block(input_block);
+
+                frame.render_widget(input, area);
+            }
+
+            FdAction::Create => {
+                // set cursor position inside box
+                frame.set_cursor_position(Position::new(
+                    area.x + 1 + self.input_index as u16,
+                    area.y + 1,
+                ));
+
+                // input box
+                let input_block = Block::bordered()
+                    .title(Line::from(" Create ".bold()).centered())
                     .title_bottom(
                         Line::from(vec![
                             " submit ".into(),
