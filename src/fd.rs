@@ -9,54 +9,27 @@ use ratatui::{
     widgets::{Block, HighlightSpacing, List, ListItem, ListState, Paragraph},
     DefaultTerminal, Frame,
 };
-use std::{fs, str::FromStr};
+use std::{env, path::PathBuf, str::FromStr};
+
+use crate::fuzzy::Fuzzy;
 
 const SELECTED_STYLE: Style = Style::new().bg(SLATE.c800).add_modifier(Modifier::BOLD);
-const NESTED_SPACER: &str = "|-";
 
 pub fn init() -> Result<()> {
-    let mut fd = Fd::new(String::from("./"));
+    let current_dir = env::current_dir().unwrap();
+    let mut fd = Fd::new(current_dir.to_string_lossy().to_string());
 
     ratatui::run(|terminal| fd.run(terminal))
 }
 
 #[derive(Debug)]
-pub struct FdPath {
-    /// full path of the file or dir
-    path: String,
-
-    /// name of the file or dir
-    name: String,
-
-    /// if path is dir or not
-    is_dir: bool,
-
-    /// for dir type if dir is expended
-    is_expended: bool,
-
-    /// string to render front of the name and
-    /// used to create a seperation
-    spacer: String,
-
-    /// path of direct parent dir
-    direct_parent: String,
-
-    /// paths of all parent dir
-    parents: Vec<String>,
-
-    /// total number of children path
-    total_paths: usize,
-}
-
-#[derive(Debug)]
 pub struct Fd {
-    base_path: String,
     exit: bool,
     list_state: ListState,
-    list: Vec<FdPath>,
     action: FdAction,
     input: String,
     input_index: usize,
+    fuzzy: Fuzzy,
 }
 
 #[derive(Debug)]
@@ -69,16 +42,13 @@ enum FdAction {
 
 impl Fd {
     pub fn new(path: String) -> Fd {
-        let paths = Fd::retreive_paths(path.to_owned(), String::from(""), Vec::new());
-
         Fd {
-            base_path: path.to_owned(),
             exit: false,
             list_state: ListState::default(),
-            list: paths,
             action: FdAction::Normal,
             input: String::new(),
             input_index: 0,
+            fuzzy: Fuzzy::new(PathBuf::from(path.to_owned())),
         }
     }
 
@@ -113,7 +83,8 @@ impl Fd {
         let [list_area, preview_area] = horizontal.areas(main_area);
 
         // title area
-        frame.render_widget(Line::from(" Enhanced <fd> ".bold()).centered(), title_area);
+        let headers = vec![" Enhanced <fd> ".bold(), self.fuzzy.base_path().bold()];
+        frame.render_widget(Line::from(headers).centered(), title_area);
 
         // list area
         self.render_list(frame, list_area);
@@ -139,38 +110,6 @@ impl Fd {
         Ok(())
     }
 
-    fn retreive_paths(path: String, spacer: String, parents: Vec<String>) -> Vec<FdPath> {
-        let mut paths: Vec<FdPath> = Vec::new();
-        let dir = fs::read_dir(&path).expect("unable to read dir");
-
-        for item in dir.into_iter().flatten() {
-            if let Ok(metadata) = item.metadata() {
-                let mut fd_path = FdPath {
-                    path: item.path().to_string_lossy().to_string(),
-                    name: item
-                        .file_name()
-                        .into_string()
-                        .unwrap_or("unknown".to_string()),
-                    spacer: spacer.to_owned(),
-                    is_expended: false,
-                    is_dir: metadata.is_dir(),
-                    total_paths: 0,
-                    direct_parent: item.path().parent().unwrap().to_string_lossy().to_string(),
-                    parents: Vec::new(),
-                };
-
-                if !parents.is_empty() {
-                    fd_path.parents.append(&mut parents.to_vec());
-                }
-
-                fd_path.parents.push(path.to_owned());
-                paths.push(fd_path);
-            }
-        }
-
-        paths
-    }
-
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self.action {
             FdAction::Normal => match key_event.code {
@@ -182,29 +121,21 @@ impl Fd {
 
                 KeyCode::Char('d') => {
                     self.action = FdAction::Delete;
-
-                    if let Some(selected) = self.get_selected() {
-                        self.input = selected.path.to_owned();
-                    }
                 }
 
                 KeyCode::Char('a') => {
                     self.action = FdAction::Create;
-
-                    if let Some(selected) = self.get_selected() {
-                        self.input = selected.path.to_owned();
-                    }
                 }
 
                 KeyCode::Char('r') => {
                     self.action = FdAction::Rename;
-
-                    if let Some(selected) = self.get_selected() {
-                        self.input = selected.path.to_owned();
-                    }
                 }
 
-                KeyCode::Enter => self.toggle_expend(),
+                KeyCode::Enter => {
+                    if let Some(idx) = self.list_state.selected() {
+                        self.fuzzy.toggle_fuzzy(idx);
+                    }
+                }
 
                 _ => {}
             },
@@ -215,22 +146,7 @@ impl Fd {
                     self.reset_cursor();
                 }
 
-                KeyCode::Enter => {
-                    let input_value = self.input.to_owned();
-
-                    // if ends with "/" create dir else file
-                    if input_value.ends_with("/") {
-                        fs::create_dir_all(input_value).expect("unable to create dirs");
-                    } else {
-                        fs::File::create_new(input_value)
-                            .expect("unable to create file or intermidiate dir does not exits");
-                    }
-
-                    self.list =
-                        Fd::retreive_paths(self.base_path.to_owned(), String::from(""), Vec::new());
-                    self.reset_cursor();
-                    self.action = FdAction::Normal;
-                }
+                KeyCode::Enter => {}
 
                 KeyCode::Right => self.move_cursor_right(),
 
@@ -249,20 +165,7 @@ impl Fd {
                     self.reset_cursor();
                 }
 
-                KeyCode::Enter => {
-                    let input_value = self.input.to_owned();
-
-                    // rename file
-                    if let Some(selected) = self.get_selected() {
-                        fs::rename(&selected.path, input_value)
-                            .expect("unable to rename something went wrong");
-                    }
-
-                    self.list =
-                        Fd::retreive_paths(self.base_path.to_owned(), String::from(""), Vec::new());
-                    self.reset_cursor();
-                    self.action = FdAction::Normal;
-                }
+                KeyCode::Enter => {}
 
                 KeyCode::Right => self.move_cursor_right(),
 
@@ -282,18 +185,6 @@ impl Fd {
                 }
 
                 KeyCode::Enter => {
-                    if let Some(selected) = self.get_selected() {
-                        if selected.is_dir {
-                            fs::remove_dir_all(&selected.path)
-                                .expect("unable to delete dir something went wrong");
-                        } else {
-                            fs::remove_file(&selected.path)
-                                .expect("unable to delete something went wrong");
-                        }
-                    }
-
-                    self.list =
-                        Fd::retreive_paths(self.base_path.to_owned(), String::from(""), Vec::new());
                     self.reset_cursor();
                     self.action = FdAction::Normal;
                 }
@@ -362,73 +253,9 @@ impl Fd {
         self.exit = true;
     }
 
-    fn get_selected(&mut self) -> Option<&FdPath> {
-        if let Some(selected_idx) = self.list_state.selected() {
-            if let Some(item) = self.list.get(selected_idx) {
-                Some(item)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
-    fn toggle_expend(&mut self) {
-        if let Some(selected_idx) = self.list_state.selected() {
-            if let Some(item) = self.list.get(selected_idx) {
-                if item.is_dir {
-                    if item.is_expended {
-                        self.collaspe(selected_idx);
-                    } else {
-                        self.expand(selected_idx);
-                    }
-                }
-            }
-        }
-    }
-
-    fn collaspe(&mut self, selected_idx: usize) {
-        if let Some(item) = self.list.get_mut(selected_idx) {
-            item.total_paths = 0;
-            item.is_expended = false;
-
-            let path = item.path.to_owned();
-
-            let mut remove_idxs: Vec<usize> = Vec::new();
-            for (i, list_item) in self.list.iter().enumerate() {
-                for p in list_item.parents.iter() {
-                    if *p == path {
-                        remove_idxs.push(i);
-                    }
-                }
-            }
-
-            if !remove_idxs.is_empty() {
-                let remove_idx_from = remove_idxs[0];
-                let remove_idx_to = remove_idxs[remove_idxs.len() - 1] + 1;
-
-                self.list.drain(remove_idx_from..remove_idx_to);
-            }
-        }
-    }
-
-    fn expand(&mut self, selected_idx: usize) {
-        if let Some(item) = self.list.get_mut(selected_idx) {
-            let insert_idx = selected_idx + 1;
-            let spacer = item.spacer.to_owned() + NESTED_SPACER;
-            let paths = Fd::retreive_paths(item.path.to_owned(), spacer, item.parents.to_vec());
-
-            item.total_paths += paths.len();
-            item.is_expended = true;
-
-            self.list.splice(insert_idx..insert_idx, paths);
-        }
-    }
-
     fn render_preview(&self, frame: &mut Frame, area: Rect) {
         let selected_idx = self.list_state.selected();
-        let item = self.list.get(selected_idx.unwrap()).unwrap();
+        let item = self.fuzzy.fuzzies().get(selected_idx.unwrap()).unwrap();
 
         let block = Block::bordered()
             .title(Line::from(" Preview ".bold()).centered())
@@ -437,30 +264,12 @@ impl Fd {
         let text = vec![
             Line::from(vec![
                 Span::raw("name: "),
-                Span::styled(item.name.to_owned(), Style::new().green().italic()),
+                Span::styled(item.name().to_owned(), Style::new().green().italic()),
             ]),
             Line::from(vec![
                 Span::raw("path: "),
-                Span::styled(item.path.to_owned(), Style::new().green().italic()),
-            ]),
-            Line::from(vec![
-                Span::raw("parents: "),
                 Span::styled(
-                    format!("{:?}", item.parents.to_owned()),
-                    Style::new().green().italic(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::raw("direct parent: "),
-                Span::styled(
-                    format!("{:?}", item.direct_parent.to_owned()),
-                    Style::new().green().italic(),
-                ),
-            ]),
-            Line::from(vec![
-                Span::raw("total_paths: "),
-                Span::styled(
-                    format!("{:?}", item.total_paths),
+                    item.path().to_string_lossy().to_string(),
                     Style::new().green().italic(),
                 ),
             ]),
@@ -472,11 +281,12 @@ impl Fd {
 
     fn render_list(&mut self, frame: &mut Frame, area: Rect) {
         let items: Vec<ListItem> = self
-            .list
+            .fuzzy
+            .fuzzies()
             .iter()
-            .map(|p| {
-                let icon = FileIcon::from(&p.path);
-                let spacer = &p.spacer;
+            .map(|f| {
+                let icon = FileIcon::from(f.path());
+                let spacer = f.spacer();
 
                 ListItem::from(
                     Text::from(Line::from(vec![
@@ -487,7 +297,7 @@ impl Fd {
                             .style(Style::new().fg(Color::from_str(icon.color).unwrap())),
                         Span::from(" "),
                         // filename
-                        Span::from(p.name.to_owned()),
+                        Span::from(f.name()),
                     ]))
                     .bold(),
                 )

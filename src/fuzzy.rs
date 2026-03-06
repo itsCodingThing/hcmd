@@ -33,6 +33,20 @@ pub struct Fuzz {
     children: usize,
 }
 
+impl Fuzz {
+    pub fn path(&self) -> PathBuf {
+        self.path.to_owned()
+    }
+
+    pub fn spacer(&self) -> String {
+        self.spacer.to_owned()
+    }
+
+    pub fn name(&self) -> String {
+        self.name.to_owned()
+    }
+}
+
 #[derive(Debug)]
 pub struct Fuzzy {
     base_path: PathBuf,
@@ -47,8 +61,34 @@ impl Fuzzy {
         }
     }
 
+    pub fn base_path(&self) -> String {
+        self.base_path.to_string_lossy().to_string()
+    }
+
+    pub fn base_name(&self) -> String {
+        self.base_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string()
+    }
+
     pub fn fuzzies(&self) -> &Vec<Fuzz> {
-        self.fuzzies.as_ref()
+        &self.fuzzies
+    }
+
+    pub fn toggle_fuzzy(&mut self, idx: usize) {
+        let fuzzy = if let Some(f) = self.fuzzies.get(idx) {
+            f
+        } else {
+            return;
+        };
+
+        if fuzzy.is_expanded {
+            self.collaspe_fuzzy(idx);
+        } else {
+            self.expand_fuzzy(idx);
+        }
     }
 
     pub fn expand_fuzzy(&mut self, idx: usize) {
@@ -59,8 +99,11 @@ impl Fuzzy {
         };
 
         let path = fuzzy.path.to_owned();
+        let mut spacer = fuzzy.spacer.to_string();
+        spacer.push_str(constants::NESTED_SPACER.to_string().as_str());
+
         let child_fuzzies = Scanner::new()
-            .spacer(constants::NESTED_SPACER.to_string())
+            .spacer(spacer)
             .parents(fuzzy.parents.to_owned())
             .scan(path.to_owned());
 
@@ -79,7 +122,7 @@ impl Fuzzy {
         };
 
         let path = fuzzy.path.to_owned();
-        fuzzy.is_expanded = true;
+        fuzzy.is_expanded = false;
         fuzzy.children = 0;
 
         let mut remove_idxs: Vec<usize> = Vec::new();
