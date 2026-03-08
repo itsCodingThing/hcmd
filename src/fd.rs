@@ -146,7 +146,13 @@ impl Fd {
                     self.reset_cursor();
                 }
 
-                KeyCode::Enter => {}
+                KeyCode::Enter => {
+                    if let Some(idx) = self.list_state.selected() {
+                        self.fuzzy.create_fuzzy(idx, self.input.to_string());
+                    }
+
+                    self.action = FdAction::Normal;
+                }
 
                 KeyCode::Right => self.move_cursor_right(),
 
@@ -270,6 +276,20 @@ impl Fd {
                 Span::raw("path: "),
                 Span::styled(
                     item.path().to_string_lossy().to_string(),
+                    Style::new().green().italic(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("direct_parent: "),
+                Span::styled(
+                    format!("{:?}", item.direct_parent),
+                    Style::new().green().italic(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("parents: "),
+                Span::styled(
+                    format!("{:?}", item.parents()),
                     Style::new().green().italic(),
                 ),
             ]),

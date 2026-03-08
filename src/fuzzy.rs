@@ -1,10 +1,15 @@
+use cuid::cuid2;
 use serde::Serialize;
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, DirEntry, File},
+    path::{Path, PathBuf},
+};
 
-use crate::constants;
-
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Fuzz {
+    /// id for fuzz
+    id: String,
+
     /// full path of the file or dir
     path: PathBuf,
 
@@ -21,7 +26,7 @@ pub struct Fuzz {
     is_expanded: bool,
 
     /// path of direct parent dir
-    direct_parent: PathBuf,
+    pub direct_parent: PathBuf,
 
     /// all the parents
     parents: Vec<PathBuf>,
@@ -34,6 +39,21 @@ pub struct Fuzz {
 }
 
 impl Fuzz {
+    pub fn new() -> Fuzz {
+        Fuzz {
+            id: cuid2(),
+            path: PathBuf::new(),
+            name: String::new(),
+            is_dir: false,
+            is_file: false,
+            is_expanded: false,
+            direct_parent: PathBuf::new(),
+            parents: Vec::new(),
+            spacer: String::new(),
+            children: 0,
+        }
+    }
+
     pub fn path(&self) -> PathBuf {
         self.path.to_owned()
     }
@@ -45,6 +65,68 @@ impl Fuzz {
     pub fn name(&self) -> String {
         self.name.to_owned()
     }
+
+    pub fn parents(&self) -> Vec<PathBuf> {
+        self.parents.to_vec()
+    }
+
+    fn set_parents(&mut self, parents: Vec<PathBuf>) -> &mut Self {
+        self.parents = parents;
+        self
+    }
+
+    fn set_spacer(&mut self, spacer: String) -> &mut Self {
+        self.spacer = spacer;
+        self
+    }
+
+    fn read_path(&mut self, path: PathBuf) {
+        let meta = if let Ok(f) = File::open(&path) {
+            if let Ok(meta) = f.metadata() {
+                meta
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        self.name = if let Some(name) = path.file_name() {
+            name.to_string_lossy().to_string()
+        } else {
+            "unknown".to_string()
+        };
+
+        self.path = path;
+        self.is_dir = meta.is_dir();
+        self.is_file = meta.is_file();
+        self.is_expanded = false;
+
+        if let Some(p) = self.path().parent() {
+            self.direct_parent = p.to_owned();
+        };
+    }
+
+    fn read_dir_entry(&mut self, entry: DirEntry) {
+        self.path = entry.path();
+        self.name = entry.file_name().to_string_lossy().to_string();
+        self.is_dir = entry.path().is_dir();
+        self.is_file = entry.path().is_file();
+
+        if let Some(p) = self.path().parent() {
+            self.direct_parent = p.to_owned();
+        };
+    }
+
+    fn create(&mut self, path: PathBuf) {
+        if path.ends_with("/") {
+            fs::create_dir(&path).unwrap();
+        } else {
+            File::create_new(&path).unwrap();
+        };
+
+        self.read_path(path);
+    }
 }
 
 #[derive(Debug)]
@@ -54,10 +136,19 @@ pub struct Fuzzy {
 }
 
 impl Fuzzy {
-    pub fn new(path: PathBuf) -> Fuzzy {
+    pub const TOP_SPACER: &str = " ";
+    pub const NESTED_SPACER: &str = "|-";
+
+    pub fn new(path: PathBuf) -> Self {
+        let mut scanner = Scanner::new();
+
+        // set default top level spacer
+        scanner.set_spacer(Fuzzy::TOP_SPACER.to_string());
+        scanner.set_parents([path.to_owned()].to_vec());
+
         Fuzzy {
             base_path: path.to_owned(),
-            fuzzies: Scanner::new().scan(path),
+            fuzzies: scanner.scan(path),
         }
     }
 
@@ -98,17 +189,28 @@ impl Fuzzy {
             return;
         };
 
+        // expand is only for dir
+        if fuzzy.is_file {
+            return;
+        }
+
         let path = fuzzy.path.to_owned();
+
+        // set spacer for children
         let mut spacer = fuzzy.spacer.to_string();
-        spacer.push_str(constants::NESTED_SPACER.to_string().as_str());
+        spacer.push_str(Fuzzy::NESTED_SPACER.to_string().as_str());
+
+        // set parents for children
+        let mut parents = fuzzy.parents.to_vec();
+        parents.push(path.to_owned());
 
         let child_fuzzies = Scanner::new()
-            .spacer(spacer)
-            .parents(fuzzy.parents.to_owned())
+            .set_spacer(spacer)
+            .set_parents(parents)
             .scan(path.to_owned());
 
-        fuzzy.is_expanded = true;
         fuzzy.children = child_fuzzies.len();
+        fuzzy.is_expanded = true;
 
         let insert_to = idx + 1;
         self.fuzzies.splice(insert_to..insert_to, child_fuzzies);
@@ -120,6 +222,10 @@ impl Fuzzy {
         } else {
             return;
         };
+
+        if fuzzy.is_file {
+            return;
+        }
 
         let path = fuzzy.path.to_owned();
         fuzzy.is_expanded = false;
@@ -141,45 +247,30 @@ impl Fuzzy {
     }
 
     pub fn create_fuzzy(&mut self, idx: usize, name: String) {
-        let fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
+        let insert_to = idx + 1;
+        let selected_fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
             f
         } else {
             return;
         };
 
-        let where_to = if fuzzy.is_file {
-            fuzzy.direct_parent.to_owned()
+        let path: PathBuf;
+        let mut fuzz = Fuzz::new();
+
+        if selected_fuzzy.is_file {
+            path = selected_fuzzy.direct_parent.join(&name);
+            fuzz.set_parents(selected_fuzzy.parents.to_vec());
+            fuzz.set_spacer(selected_fuzzy.spacer.to_owned());
         } else {
-            fuzzy.path.to_owned()
+            path = selected_fuzzy.path.join(&name);
+            let mut parents = selected_fuzzy.parents.to_owned();
+            parents.push(selected_fuzzy.path.to_owned());
+            fuzz.set_parents(parents);
+            fuzz.set_spacer(selected_fuzzy.spacer.to_owned() + Fuzzy::NESTED_SPACER);
         };
-        let full_path = where_to.join(&name);
 
-        // if ends with "/" create dir else file
-        if name.ends_with("/") {
-            fs::create_dir_all(&full_path).expect("unable to create dirs");
-        } else {
-            fs::File::create_new(&full_path)
-                .expect("unable to create file or intermidiate dir does not exits");
-        }
-
-        let insert_to = idx;
-        let mut file_name = name.to_owned();
-        file_name.pop();
-
-        self.fuzzies.splice(
-            insert_to..insert_to,
-            vec![Fuzz {
-                path: full_path.to_owned(),
-                name: file_name,
-                is_file: where_to.is_file(),
-                is_dir: where_to.is_dir(),
-                direct_parent: where_to.to_owned(),
-                parents: Vec::new(),
-                is_expanded: false,
-                children: 0,
-                spacer: String::from(" "),
-            }],
-        );
+        fuzz.create(path);
+        self.fuzzies.splice(insert_to..insert_to, [fuzz]);
     }
 }
 
@@ -191,7 +282,7 @@ struct Scanner {
 impl Scanner {
     pub fn new() -> Self {
         Scanner {
-            spacer: String::from(" "),
+            spacer: String::new(),
             parents: Vec::new(),
         }
     }
@@ -202,24 +293,12 @@ impl Scanner {
         if let Ok(entries) = fs::read_dir(&path) {
             // this will give the only success entries
             for entry in entries.flatten() {
-                let mut fuzz = Fuzz {
-                    path: entry.path(),
-                    name: entry.file_name().to_string_lossy().to_string(),
-                    is_file: false,
-                    is_dir: false,
-                    direct_parent: path.to_owned(),
-                    is_expanded: false,
-                    spacer: self.spacer.to_owned(),
-                    children: 0,
-                    parents: self.parents.to_owned(),
-                };
+                let mut fuzz = Fuzz::new();
 
-                if let Ok(meta) = entry.metadata() {
-                    fuzz.is_dir = meta.is_dir();
-                    fuzz.is_file = meta.is_file();
-                }
+                fuzz.set_parents(self.parents.to_owned())
+                    .set_spacer(self.spacer.to_owned())
+                    .read_dir_entry(entry);
 
-                fuzz.parents.push(path.to_owned());
                 fuzzies.push(fuzz);
             }
         }
@@ -227,12 +306,12 @@ impl Scanner {
         fuzzies
     }
 
-    fn spacer(&mut self, s: String) -> &mut Self {
+    fn set_spacer(&mut self, s: String) -> &mut Self {
         self.spacer = s;
         self
     }
 
-    fn parents(&mut self, p: Vec<PathBuf>) -> &mut Self {
+    fn set_parents(&mut self, p: Vec<PathBuf>) -> &mut Self {
         self.parents.append(&mut p.to_owned());
         self
     }

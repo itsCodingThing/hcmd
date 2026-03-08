@@ -1,6 +1,5 @@
 mod cli;
 mod cmd;
-mod constants;
 mod fd;
 mod fuzzy;
 mod pomo;
