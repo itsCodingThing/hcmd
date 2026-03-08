@@ -119,7 +119,7 @@ impl Fuzz {
     }
 
     fn create(&mut self, path: PathBuf) {
-        if path.ends_with("/") {
+        if path.to_string_lossy().ends_with("/") {
             fs::create_dir(&path).unwrap();
         } else {
             File::create_new(&path).unwrap();
