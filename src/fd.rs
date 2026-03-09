@@ -121,7 +121,7 @@ impl Fd {
 
                 KeyCode::Char('d') => {
                     if let Some(idx) = self.list_state.selected() {
-                        if let Some(fuzz) = self.fuzzy.select_fuzzy(idx) {
+                        if let Some(fuzz) = self.fuzzy.get_fuzzy(idx) {
                             self.input = fuzz.name();
                             self.action = FdAction::Delete;
                         }
@@ -276,8 +276,8 @@ impl Fd {
     }
 
     fn render_preview(&self, frame: &mut Frame, area: Rect) {
-        let selected_idx = self.list_state.selected();
-        let item = self.fuzzy.fuzzies().get(selected_idx.unwrap()).unwrap();
+        let selected_idx = self.list_state.selected().unwrap();
+        let item = self.fuzzy.get_fuzzy(selected_idx).unwrap();
 
         let block = Block::bordered()
             .title(Line::from(" Preview ".bold()).centered())
@@ -298,7 +298,7 @@ impl Fd {
             Line::from(vec![
                 Span::raw("direct_parent: "),
                 Span::styled(
-                    format!("{:?}", item.direct_parent),
+                    format!("{:?}", item.direct_parent()),
                     Style::new().green().italic(),
                 ),
             ]),
@@ -308,6 +308,10 @@ impl Fd {
                     format!("{:?}", item.parents()),
                     Style::new().green().italic(),
                 ),
+            ]),
+            Line::from(vec![
+                Span::raw("size: "),
+                Span::styled(item.hsize().to_string(), Style::new().green().italic()),
             ]),
         ];
         let preview = Paragraph::new(text).block(block);

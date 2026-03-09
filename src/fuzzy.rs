@@ -2,7 +2,8 @@ use cuid::cuid2;
 use serde::Serialize;
 use std::{
     fs::{self, DirEntry, File},
-    path::{Path, PathBuf},
+    os::unix::fs::MetadataExt,
+    path::PathBuf,
 };
 
 #[derive(Debug, Serialize, Clone)]
@@ -16,6 +17,9 @@ pub struct Fuzz {
     /// name of the file or dir
     name: String,
 
+    /// file size in bytes
+    size: usize,
+
     /// if path is dir or not
     is_dir: bool,
 
@@ -26,7 +30,7 @@ pub struct Fuzz {
     is_expanded: bool,
 
     /// path of direct parent dir
-    pub direct_parent: PathBuf,
+    direct_parent: PathBuf,
 
     /// all the parents
     parents: Vec<PathBuf>,
@@ -51,6 +55,7 @@ impl Fuzz {
             parents: Vec::new(),
             spacer: String::new(),
             children: 0,
+            size: 0,
         }
     }
 
@@ -68,6 +73,34 @@ impl Fuzz {
 
     pub fn parents(&self) -> Vec<PathBuf> {
         self.parents.to_vec()
+    }
+
+    pub fn direct_parent(&self) -> PathBuf {
+        self.direct_parent.to_owned()
+    }
+
+    pub fn size(&self) -> usize {
+        self.size
+    }
+
+    pub fn hsize(&self) -> String {
+        let mut size = self.size;
+
+        // convert in kb
+        if size > 1000 {
+            size /= 1000;
+
+            // convert in mb
+            if size > 1000 {
+                size /= 1000;
+
+                size.to_string() + " mb"
+            } else {
+                size.to_string() + " kb"
+            }
+        } else {
+            size.to_string() + " bytes"
+        }
     }
 
     fn set_parents(&mut self, parents: Vec<PathBuf>) -> &mut Self {
@@ -97,6 +130,7 @@ impl Fuzz {
             "unknown".to_string()
         };
 
+        self.size = meta.size() as usize;
         self.path = path;
         self.is_dir = meta.is_dir();
         self.is_file = meta.is_file();
@@ -108,6 +142,13 @@ impl Fuzz {
     }
 
     fn read_dir_entry(&mut self, entry: DirEntry) {
+        let meta = if let Ok(meta) = entry.metadata() {
+            meta
+        } else {
+            return;
+        };
+
+        self.size = meta.size() as usize;
         self.path = entry.path();
         self.name = entry.file_name().to_string_lossy().to_string();
         self.is_dir = entry.path().is_dir();
@@ -178,19 +219,11 @@ impl Fuzzy {
         self.base_path.to_string_lossy().to_string()
     }
 
-    pub fn base_name(&self) -> String {
-        self.base_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string()
-    }
-
     pub fn fuzzies(&self) -> &Vec<Fuzz> {
         &self.fuzzies
     }
 
-    pub fn select_fuzzy(&self, idx: usize) -> Option<&Fuzz> {
+    pub fn get_fuzzy(&self, idx: usize) -> Option<&Fuzz> {
         self.fuzzies.get(idx)
     }
 
