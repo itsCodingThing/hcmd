@@ -127,6 +127,28 @@ impl Fuzz {
 
         self.read_path(path);
     }
+
+    fn remove(&mut self) {
+        let path = &self.path;
+
+        if self.is_file {
+            let _ = fs::remove_file(path);
+        }
+
+        if self.is_dir {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+
+    fn rename(&mut self, name: String) {
+        let path = self.path.to_owned();
+        let new_path = self.path.parent().unwrap().join(&name);
+
+        self.path = new_path.to_path_buf();
+        self.name = name;
+
+        let _ = fs::rename(path, new_path);
+    }
 }
 
 #[derive(Debug)]
@@ -166,6 +188,10 @@ impl Fuzzy {
 
     pub fn fuzzies(&self) -> &Vec<Fuzz> {
         &self.fuzzies
+    }
+
+    pub fn select_fuzzy(&self, idx: usize) -> Option<&Fuzz> {
+        self.fuzzies.get(idx)
     }
 
     pub fn toggle_fuzzy(&mut self, idx: usize) {
@@ -271,6 +297,35 @@ impl Fuzzy {
 
         fuzz.create(path);
         self.fuzzies.splice(insert_to..insert_to, [fuzz]);
+    }
+
+    pub fn remove_fuzzy(&mut self, idx: usize) {
+        let selected_fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
+            f
+        } else {
+            return;
+        };
+
+        if selected_fuzzy.is_dir {
+            return;
+        }
+
+        selected_fuzzy.remove();
+        self.fuzzies.remove(idx);
+    }
+
+    pub fn rename_fuzzy(&mut self, idx: usize, name: String) {
+        let selected_fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
+            f
+        } else {
+            return;
+        };
+
+        if selected_fuzzy.is_dir {
+            return;
+        }
+
+        selected_fuzzy.rename(name);
     }
 }
 

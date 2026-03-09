@@ -120,10 +120,16 @@ impl Fd {
                 KeyCode::Char('k') => self.list_state.select_previous(),
 
                 KeyCode::Char('d') => {
-                    self.action = FdAction::Delete;
+                    if let Some(idx) = self.list_state.selected() {
+                        if let Some(fuzz) = self.fuzzy.select_fuzzy(idx) {
+                            self.input = fuzz.name();
+                            self.action = FdAction::Delete;
+                        }
+                    }
                 }
 
                 KeyCode::Char('a') => {
+                    self.input.clear();
                     self.action = FdAction::Create;
                 }
 
@@ -171,7 +177,13 @@ impl Fd {
                     self.reset_cursor();
                 }
 
-                KeyCode::Enter => {}
+                KeyCode::Enter => {
+                    if let Some(idx) = self.list_state.selected() {
+                        self.fuzzy.rename_fuzzy(idx, self.input.to_string());
+                    }
+
+                    self.action = FdAction::Normal;
+                }
 
                 KeyCode::Right => self.move_cursor_right(),
 
@@ -191,6 +203,10 @@ impl Fd {
                 }
 
                 KeyCode::Enter => {
+                    if let Some(idx) = self.list_state.selected() {
+                        self.fuzzy.remove_fuzzy(idx);
+                    }
+
                     self.reset_cursor();
                     self.action = FdAction::Normal;
                 }
