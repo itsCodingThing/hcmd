@@ -182,13 +182,13 @@ impl Fuzz {
     }
 
     fn rename(&mut self, name: String) {
-        let path = self.path.to_owned();
+        let old_path = self.path.to_owned();
         let new_path = self.path.parent().unwrap().join(&name);
 
         self.path = new_path.to_path_buf();
         self.name = name;
 
-        let _ = fs::rename(path, new_path);
+        let _ = fs::rename(old_path, new_path);
     }
 }
 
@@ -206,8 +206,9 @@ impl Fuzzy {
         let mut scanner = Scanner::new();
 
         // set default top level spacer
-        scanner.set_spacer(Fuzzy::TOP_SPACER.to_string());
-        scanner.set_parents([path.to_owned()].to_vec());
+        scanner
+            .set_spacer(Fuzzy::TOP_SPACER.to_string())
+            .set_parents([path.to_owned()].to_vec());
 
         Fuzzy {
             base_path: path.to_owned(),
@@ -307,7 +308,7 @@ impl Fuzzy {
 
     pub fn create_fuzzy(&mut self, idx: usize, name: String) {
         let insert_to = idx + 1;
-        let selected_fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
+        let fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
             f
         } else {
             return;
@@ -316,16 +317,18 @@ impl Fuzzy {
         let path: PathBuf;
         let mut fuzz = Fuzz::new();
 
-        if selected_fuzzy.is_file {
-            path = selected_fuzzy.direct_parent.join(&name);
-            fuzz.set_parents(selected_fuzzy.parents.to_vec());
-            fuzz.set_spacer(selected_fuzzy.spacer.to_owned());
+        if fuzzy.is_file {
+            path = fuzzy.direct_parent.join(&name);
+
+            fuzz.set_parents(fuzzy.parents.to_vec());
+            fuzz.set_spacer(fuzzy.spacer.to_owned());
         } else {
-            path = selected_fuzzy.path.join(&name);
-            let mut parents = selected_fuzzy.parents.to_owned();
-            parents.push(selected_fuzzy.path.to_owned());
+            path = fuzzy.path.join(&name);
+            let mut parents = fuzzy.parents.to_owned();
+            parents.push(fuzzy.path.to_owned());
+
             fuzz.set_parents(parents);
-            fuzz.set_spacer(selected_fuzzy.spacer.to_owned() + Fuzzy::NESTED_SPACER);
+            fuzz.set_spacer(fuzzy.spacer.to_owned() + Fuzzy::NESTED_SPACER);
         };
 
         fuzz.create(path);
@@ -333,32 +336,36 @@ impl Fuzzy {
     }
 
     pub fn remove_fuzzy(&mut self, idx: usize) {
-        let selected_fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
+        // because all the chidlren needs to be removed also if dir
+        // is removed so collasping removes the fuzz entries
+        // in the list
+        //
+        // another way is to remove the children one by one for the
+        // selected fuzzy
+        self.collaspe_fuzzy(idx);
+
+        let fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
             f
         } else {
             return;
         };
 
-        if selected_fuzzy.is_dir {
-            return;
-        }
-
-        selected_fuzzy.remove();
+        fuzzy.remove();
         self.fuzzies.remove(idx);
     }
 
     pub fn rename_fuzzy(&mut self, idx: usize, name: String) {
-        let selected_fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
+        // because all the chidlren needs to update there parents list if dir
+        // name is updated
+        self.collaspe_fuzzy(idx);
+
+        let fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
             f
         } else {
             return;
         };
 
-        if selected_fuzzy.is_dir {
-            return;
-        }
-
-        selected_fuzzy.rename(name);
+        fuzzy.rename(name);
     }
 }
 
