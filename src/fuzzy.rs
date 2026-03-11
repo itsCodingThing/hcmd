@@ -148,13 +148,15 @@ impl Fuzz {
             return;
         };
 
-        self.size = meta.size() as usize;
-        self.path = entry.path();
-        self.name = entry.file_name().to_string_lossy().to_string();
-        self.is_dir = entry.path().is_dir();
-        self.is_file = entry.path().is_file();
+        let path = entry.path();
 
-        if let Some(p) = self.path().parent() {
+        self.size = meta.size() as usize;
+        self.name = entry.file_name().to_string_lossy().to_string();
+        self.is_dir = path.is_dir();
+        self.is_file = path.is_file();
+        self.path = path.clone();
+
+        if let Some(p) = path.parent() {
             self.direct_parent = p.to_owned();
         };
     }
@@ -236,7 +238,7 @@ impl Fuzzy {
         };
 
         if fuzzy.is_expanded {
-            self.collaspe_fuzzy(idx);
+            self.collapse_fuzzy(idx);
         } else {
             self.expand_fuzzy(idx);
         }
@@ -276,7 +278,7 @@ impl Fuzzy {
         self.fuzzies.splice(insert_to..insert_to, child_fuzzies);
     }
 
-    pub fn collaspe_fuzzy(&mut self, idx: usize) {
+    pub fn collapse_fuzzy(&mut self, idx: usize) {
         let fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
             f
         } else {
@@ -342,7 +344,7 @@ impl Fuzzy {
         //
         // another way is to remove the children one by one for the
         // selected fuzzy
-        self.collaspe_fuzzy(idx);
+        self.collapse_fuzzy(idx);
 
         let fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
             f
@@ -357,7 +359,7 @@ impl Fuzzy {
     pub fn rename_fuzzy(&mut self, idx: usize, name: String) {
         // because all the chidlren needs to update there parents list if dir
         // name is updated
-        self.collaspe_fuzzy(idx);
+        self.collapse_fuzzy(idx);
 
         let fuzzy = if let Some(f) = self.fuzzies.get_mut(idx) {
             f
