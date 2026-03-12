@@ -214,7 +214,7 @@ impl Fuzzy {
 
         Fuzzy {
             base_path: path.to_owned(),
-            fuzzies: scanner.scan(path),
+            fuzzies: scanner.scan_dir(path),
         }
     }
 
@@ -269,7 +269,7 @@ impl Fuzzy {
         let child_fuzzies = Scanner::new()
             .set_spacer(spacer)
             .set_parents(parents)
-            .scan(path.to_owned());
+            .scan_dir(path.to_owned());
 
         fuzzy.children = child_fuzzies.len();
         fuzzy.is_expanded = true;
@@ -384,7 +384,7 @@ impl Scanner {
         }
     }
 
-    pub fn scan(&mut self, path: PathBuf) -> Vec<Fuzz> {
+    pub fn scan_dir(&mut self, path: PathBuf) -> Vec<Fuzz> {
         let mut fuzzies = Vec::new();
 
         if let Ok(entries) = fs::read_dir(&path) {
