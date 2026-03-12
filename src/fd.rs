@@ -122,7 +122,7 @@ impl Fd {
                 KeyCode::Char('d') => {
                     if let Some(idx) = self.list_state.selected() {
                         if let Some(fuzz) = self.fuzzy.get_fuzzy(idx) {
-                            self.input = fuzz.name();
+                            self.input = fuzz.name().to_string();
                             self.action = FdAction::Delete;
                         }
                     }

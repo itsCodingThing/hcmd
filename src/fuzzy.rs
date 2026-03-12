@@ -59,24 +59,24 @@ impl Fuzz {
         }
     }
 
-    pub fn path(&self) -> PathBuf {
-        self.path.to_owned()
+    pub fn path(&self) -> &PathBuf {
+        &self.path
     }
 
-    pub fn spacer(&self) -> String {
-        self.spacer.to_owned()
+    pub fn spacer(&self) -> &String {
+        &self.spacer
     }
 
-    pub fn name(&self) -> String {
-        self.name.to_owned()
+    pub fn name(&self) -> &String {
+        &self.name
     }
 
-    pub fn parents(&self) -> Vec<PathBuf> {
-        self.parents.to_vec()
+    pub fn parents(&self) -> &[PathBuf] {
+        &self.parents
     }
 
-    pub fn direct_parent(&self) -> PathBuf {
-        self.direct_parent.to_owned()
+    pub fn direct_parent(&self) -> &PathBuf {
+        &self.direct_parent
     }
 
     pub fn size(&self) -> usize {
